@@ -1,0 +1,7 @@
+[package]
+name = "gitboxd"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+gitbox-core.workspace = true

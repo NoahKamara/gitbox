@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/gitbox",
+    "crates/gitbox-core",
+    "crates/gitboxd",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+gitbox-core = { path = "crates/gitbox-core" }
