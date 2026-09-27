@@ -42,6 +42,9 @@ enum Commands {
     Ssh {
         #[arg(long)]
         data_dir: PathBuf,
+        /// Configuration file, defaults to config.toml in the data directory.
+        #[arg(long)]
+        config: Option<PathBuf>,
         #[arg(long)]
         key_id: String,
     },
@@ -76,7 +79,11 @@ fn run() -> Result<()> {
             ssh_key,
             executable,
         } => init(&data_dir, &admin, &ssh_key, executable.as_deref()),
-        Commands::Ssh { data_dir, key_id } => ssh::session(&data_dir, &key_id),
+        Commands::Ssh {
+            data_dir,
+            config,
+            key_id,
+        } => ssh::session(&data_dir, config.as_deref(), &key_id),
     }
 }
 

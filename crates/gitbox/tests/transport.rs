@@ -9,6 +9,33 @@ use serde_json::json;
 use tempfile::tempdir;
 
 #[test]
+fn set_default_preserves_declarative_config_symlinks() {
+    let dir = tempdir().unwrap();
+    let managed = dir.path().join("managed.toml");
+    let contents = "default_server = 'declarative-host'\n";
+    fs::write(&managed, contents).unwrap();
+    let config_dir = dir.path().join("gitbox");
+    fs::create_dir(&config_dir).unwrap();
+    let config = config_dir.join("config.toml");
+    std::os::unix::fs::symlink(&managed, &config).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gitbox"))
+        .args(["server", "set-default", "another-host"])
+        .env("XDG_CONFIG_HOME", dir.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("declarative configuration"));
+    assert!(
+        fs::symlink_metadata(&config)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_to_string(managed).unwrap(), contents);
+}
+
+#[test]
 fn cli_exchanges_typed_requests_and_rejects_invalid_responses() {
     let dir = tempdir().unwrap();
     let ssh = dir.path().join("ssh");

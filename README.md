@@ -5,6 +5,104 @@ current slice has one administrator. The administrator can create folders and
 repositories with the `gitbox` client; ordinary Git handles push, clone, and
 fetch.
 
+## Nix
+
+The flake exports `packages.<system>.gitbox` and `default`,
+`nixosModules.default`, `homeManagerModules.default`, and `overlays.default`.
+The package includes both binaries and their Git/OpenSSH runtime dependencies.
+
+```sh
+nix build .#gitbox
+nix run . -- --help
+```
+
+Add Gitbox as an input in `~/.nix-config/flake.nix`, using your Git remote:
+
+```nix
+inputs.gitbox.url = "git+ssh://noah@chimaera/~noah/gitbox?ref=main";
+inputs.gitbox.inputs.nixpkgs.follows = "nixpkgs";
+```
+
+### NixOS server
+
+Import the module in the server's configuration:
+
+```nix
+{ inputs, lib, ... }:
+{
+  imports = [ inputs.gitbox.nixosModules.default ];
+
+  services.gitbox = {
+    enable = true;
+    dataDir = "/var/lib/gitbox";
+    user = "gitbox";
+    group = "gitbox";
+    admin = {
+      name = "noah";
+      sshKey = "ssh-ed25519 AAAA... noah@laptop";
+      # Or: sshKey = lib.trim (builtins.readFile ./keys/noah.pub);
+    };
+  };
+}
+```
+
+The module creates the account and `dataDir/repos`, enables the system OpenSSH
+server, and restricts the Gitbox account to Gitbox commands and its declared
+admin key. It disables forwarding, interactive sessions, and user SSH startup
+scripts for that account. Configure ports, listen addresses, firewall behavior,
+and any host-wide SSH allowlists through `services.openssh`. Include the Gitbox
+account if you use `AllowUsers` or `AllowGroups`.
+
+Server configuration and the public key live in the Nix store. Rebuilds apply
+key changes and select the current package; no `gitboxd init` step is needed.
+Repositories persist under `dataDir/repos`. Changing `dataDir`, `user`, or `group`
+does not migrate existing repositories or recursively change their ownership.
+The current server supports one administrator key.
+
+Replace any older local Gitbox module and `noah.services.gitbox` configuration
+with this import and `services.gitbox`. The older `gitbox --root ... ssh`
+interface is no longer supported. Move existing bare repositories into
+`dataDir/repos` before switching if they currently use a different layout.
+
+### Home Manager client
+
+Import the client module in your Home Manager configuration, on Linux or macOS:
+
+```nix
+{ inputs, ... }:
+{
+  imports = [ inputs.gitbox.homeManagerModules.default ];
+
+  programs.gitbox = {
+    enable = true;
+    settings.default_server = "home-gitbox";
+  };
+
+  programs.ssh = {
+    enable = true;
+    matchBlocks.home-gitbox = {
+      hostname = "chimaera.noahkamara.com";
+      user = "gitbox";
+      identityFile = "~/.ssh/id_ed25519";
+      identitiesOnly = true;
+    };
+  };
+}
+```
+
+Pass `inputs` through `home-manager.extraSpecialArgs` when using Home Manager
+inside NixOS or nix-darwin, or through `extraSpecialArgs` in
+`homeManagerConfiguration`. Both modules accept a `package` override.
+
+Home Manager owns `$XDG_CONFIG_HOME/gitbox/config.toml`. Change
+`programs.gitbox.settings.default_server` and rebuild to change the default;
+`gitbox --server <alias>` still overrides it for one command. The client refuses
+to overwrite a symlink with `gitbox server set-default`.
+
+After publishing the Gitbox changes to your input's remote, run
+`nix flake update gitbox` in `~/.nix-config`, then rebuild the server and client
+configurations using your usual deployment commands.
+
 ## Install and initialize
 
 Install `gitboxd` on the server at a stable absolute path and `gitbox` on the

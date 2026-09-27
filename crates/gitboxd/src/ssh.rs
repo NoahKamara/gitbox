@@ -36,9 +36,10 @@ impl FromStr for SshCommand {
     }
 }
 
-pub fn session(data_dir: &Path, key_id: &str) -> Result<()> {
-    let config_text =
-        fs::read_to_string(data_dir.join("config.toml")).context("read Gitbox configuration")?;
+pub fn session(data_dir: &Path, config_path: Option<&Path>, key_id: &str) -> Result<()> {
+    let default_config = data_dir.join("config.toml");
+    let config_text = fs::read_to_string(config_path.unwrap_or(&default_config))
+        .context("read Gitbox configuration")?;
     let config: Config = toml::from_str(&config_text).context("parse Gitbox configuration")?;
     ensure!(config.version == 1, "unsupported configuration version");
     ensure!(key_id == "admin", "unknown SSH key");

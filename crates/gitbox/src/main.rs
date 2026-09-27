@@ -77,6 +77,13 @@ fn run() -> Result<()> {
         Commands::Server(ServerCommands::SetDefault { server }) => {
             transport::validate_server(&server)?;
             let config_path = config_path()?;
+            if fs::symlink_metadata(&config_path)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink())
+            {
+                bail!(
+                    "Gitbox config is a symlink; update its declarative configuration instead, or use --server for this command"
+                );
+            }
             let mut config = read_config(&config_path)?;
             config.insert(
                 "default_server".to_owned(),

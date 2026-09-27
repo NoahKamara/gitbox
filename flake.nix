@@ -8,29 +8,11 @@
 
   outputs =
     { nixpkgs, flake-utils, ... }:
-    flake-utils.lib.eachDefaultSystem (
+    flake-utils.lib.eachSystem [ "aarch64-darwin" "aarch64-linux" "x86_64-linux" ] (
       system:
       let
         pkgs = import nixpkgs { inherit system; };
-        gitbox = pkgs.rustPlatform.buildRustPackage {
-          pname = "gitbox";
-          version = "0.1.0";
-          src = ./.;
-
-          cargoLock.lockFile = ./Cargo.lock;
-
-          nativeBuildInputs = [ pkgs.makeWrapper ];
-          nativeCheckInputs = [ pkgs.git pkgs.openssh ];
-
-          postInstall = ''
-            for program in gitbox gitboxd; do
-              wrapProgram $out/bin/$program \
-                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git pkgs.openssh ]}
-            done
-          '';
-
-          meta.mainProgram = "gitbox";
-        };
+        gitbox = pkgs.callPackage ./nix/package.nix { };
       in
       {
         packages = {
@@ -38,7 +20,13 @@
           inherit gitbox;
         };
 
-        checks.default = gitbox;
+        checks = {
+          default = gitbox;
+        }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          nixos = import ./nix/tests/nixos.nix { inherit pkgs gitbox; };
+        };
+        formatter = pkgs.nixfmt;
 
         apps.default = flake-utils.lib.mkApp {
           drv = gitbox;
@@ -51,6 +39,7 @@
             git
             nil
             nixd
+            nixfmt
             openssl
             openssh
             pkg-config
@@ -66,5 +55,12 @@
           };
         };
       }
-    );
+    )
+    // {
+      nixosModules.default = import ./nix/nixos.nix;
+      homeManagerModules.default = import ./nix/home-manager.nix;
+      overlays.default = final: prev: {
+        gitbox = final.callPackage ./nix/package.nix { };
+      };
+    };
 }
