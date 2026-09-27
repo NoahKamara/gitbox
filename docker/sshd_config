@@ -1,0 +1,24 @@
+Port 22
+ListenAddress 0.0.0.0
+HostKey /data/ssh/ssh_host_ed25519_key
+PidFile /run/sshd.pid
+
+AllowUsers gitbox
+AuthorizedKeysFile /data/.ssh/authorized_keys
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+PermitEmptyPasswords no
+StrictModes yes
+UseDNS no
+
+AllowAgentForwarding no
+AllowTcpForwarding no
+X11Forwarding no
+PermitTunnel no
+PermitUserEnvironment no
+PermitTTY no
+
+AcceptEnv GIT_PROTOCOL

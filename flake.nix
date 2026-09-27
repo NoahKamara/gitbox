@@ -20,11 +20,13 @@
           cargoLock.lockFile = ./Cargo.lock;
 
           nativeBuildInputs = [ pkgs.makeWrapper ];
-          nativeCheckInputs = [ pkgs.git ];
+          nativeCheckInputs = [ pkgs.git pkgs.openssh ];
 
           postInstall = ''
-            wrapProgram $out/bin/gitbox \
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git ]}
+            for program in gitbox gitboxd; do
+              wrapProgram $out/bin/$program \
+                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git pkgs.openssh ]}
+            done
           '';
 
           meta.mainProgram = "gitbox";

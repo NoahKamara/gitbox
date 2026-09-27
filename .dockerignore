@@ -1,0 +1,6 @@
+.git
+.direnv
+target
+GitBoxOLD
+.gitbox-dev
+.env

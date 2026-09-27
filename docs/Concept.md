@@ -301,34 +301,13 @@ version.
 
 Repository contents remain ordinary Git repositories on disk.
 
-Gitbox-specific metadata should be stored separately.
+The first slice stores the administrator and their SSH public key in a managed
+configuration file. Folders and bare repositories on disk are authoritative;
+they do not need duplicate metadata entries.
 
-SQLite is a suitable initial metadata store because it provides:
-
--   Transactions
--   Referential integrity
--   Simple backups
--   No additional server process
--   Mature Rust support
--   Straightforward inspection and recovery
-
-Likely metadata includes:
-
-``` text
-principals
-ssh_keys
-repositories
-permissions
-mirrors
-configuration metadata
-```
-
-The filesystem remains authoritative for Git object data.
-
-The database is authoritative for Gitbox identities and authorization.
-
-Gitbox should explicitly define reconciliation behavior for cases where
-repositories are manually added, removed, or moved on disk.
+When multiple principals, keys, and access rules are added, Gitbox may move
+identity and authorization state to SQLite. Repository contents will remain
+ordinary Git repositories on disk.
 
 ## 12. Repository Lifecycle
 
@@ -337,10 +316,10 @@ Creating a repository should approximately perform:
 1.  Validate the requested logical path.
 2.  Verify that the destination does not exist.
 3.  Check administrative authorization.
-4.  Create required organizational directories.
+4.  Create required organizational directories after checking create access
+    at each existing parent. The first slice only admits the administrator.
 5.  Initialize a bare Git repository.
-6.  Record Gitbox metadata.
-7.  Return the resulting repository information.
+6.  Return the resulting repository information.
 
 Deletion should be deliberately harder to trigger accidentally.
 
@@ -353,28 +332,26 @@ release.
 
 ## 13. CLI Configuration
 
-A client should be able to define a Gitbox server using familiar SSH
-concepts.
+A client uses SSH hosts and aliases from the user's SSH configuration. Gitbox
+stores only the default alias in `~/.config/gitbox/config.toml` (or under
+`$XDG_CONFIG_HOME`):
 
 For example:
 
 ``` toml
-[servers.home]
-host = "git.example.net"
-user = "git"
+default_server = "home"
 ```
 
-Usage could then look like:
+The CLI can write this setting, and a command can override it:
 
 ``` sh
+gitbox server set-default home
+gitbox repo list
 gitbox --server home repo list
 ```
 
-A default server may be configurable.
-
-Gitbox should avoid duplicating SSH configuration unnecessarily. Where
-possible, the underlying SSH configuration should remain responsible for
-ports, key selection, jump hosts, agents, and host aliases.
+The underlying SSH configuration remains responsible for ports, key
+selection, jump hosts, agents, and host aliases.
 
 ## 14. Git Remote Experience
 
@@ -570,7 +547,7 @@ The first usable Gitbox release should provide:
 -   Repository-level read/write permissions
 -   Folder-level inherited read/write permissions
 -   Administrative principals
--   SQLite metadata
+-   Durable metadata for identities and authorization
 -   A Rust `gitbox` CLI
 -   A Rust `gitboxd` server
 

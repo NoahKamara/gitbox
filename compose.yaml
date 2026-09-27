@@ -1,0 +1,13 @@
+services:
+  gitbox:
+    build: .
+    ports:
+      - "127.0.0.1:${GITBOX_SSH_PORT:-2222}:22"
+    environment:
+      GITBOX_ADMIN: "${GITBOX_ADMIN:-admin}"
+    volumes:
+      - gitbox-data:/data
+      - "${GITBOX_ADMIN_KEY_FILE:?Set GITBOX_ADMIN_KEY_FILE to an SSH public key}:/bootstrap/admin.pub:ro"
+
+volumes:
+  gitbox-data:

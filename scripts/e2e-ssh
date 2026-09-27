@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+repo_root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$repo_root"
+
+for command in cargo git ssh ssh-keygen ssh-keyscan sshd; do
+  command -v "$command" >/dev/null || {
+    echo "missing $command" >&2
+    exit 1
+  }
+done
+
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_GLOBAL=/dev/null
+
+workspace=$(mktemp -d /tmp/gitbox-e2e.XXXXXX)
+sshd_pid=
+cleanup() {
+  status=$?
+  trap - EXIT
+  if [[ -n $sshd_pid ]]; then
+    kill "$sshd_pid" 2>/dev/null || true
+    wait "$sshd_pid" 2>/dev/null || true
+  fi
+  if [[ $status -eq 0 ]]; then
+    rm -rf -- "$workspace"
+  else
+    echo "test artifacts kept at $workspace" >&2
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+
+cargo build --quiet --offline
+mkdir "$workspace/bin"
+cp target/debug/gitbox target/debug/gitboxd "$workspace/bin/"
+
+ssh-keygen -q -t ed25519 -N '' -f "$workspace/client-key"
+ssh-keygen -q -t ed25519 -N '' -f "$workspace/host-key"
+"$workspace/bin/gitboxd" init \
+  --data-dir "$workspace/server" \
+  --admin test-admin \
+  --ssh-key "$workspace/client-key.pub" \
+  --executable "$workspace/bin/gitboxd"
+
+current_user=$(id -un)
+sshd_path=$(command -v sshd)
+ssh_path=$(command -v ssh)
+ssh_keyscan_path=$(command -v ssh-keyscan)
+known_hosts="$workspace/known_hosts"
+sshd_config="$workspace/sshd_config"
+sshd_log="$workspace/sshd.log"
+client_config="$workspace/client_config"
+
+for attempt in {1..10}; do
+  port=$((20000 + RANDOM % 20000))
+  cat >"$sshd_config" <<CONFIG
+Port $port
+ListenAddress 127.0.0.1
+HostKey $workspace/host-key
+PidFile $workspace/sshd.pid
+AuthorizedKeysFile $workspace/server/.ssh/authorized_keys
+AllowUsers $current_user
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+StrictModes no
+UsePAM no
+UseDNS no
+AcceptEnv GIT_PROTOCOL
+LogLevel ERROR
+CONFIG
+
+  "$sshd_path" -t -f "$sshd_config" 2>"$sshd_log" || {
+    cat "$sshd_log" >&2
+    exit 1
+  }
+  "$sshd_path" -D -e -f "$sshd_config" >"$sshd_log" 2>&1 &
+  candidate_pid=$!
+  for wait_attempt in {1..50}; do
+    if "$ssh_keyscan_path" -T 1 -p "$port" 127.0.0.1 >"$known_hosts" 2>/dev/null \
+      && [[ -s $known_hosts ]]; then
+      sshd_pid=$candidate_pid
+      break
+    fi
+    if ! kill -0 "$candidate_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ -n $sshd_pid ]]; then
+    break
+  fi
+  kill "$candidate_pid" 2>/dev/null || true
+  wait "$candidate_pid" 2>/dev/null || true
+done
+
+if [[ -z $sshd_pid ]]; then
+  cat "$sshd_log" >&2
+  exit 1
+fi
+
+cat >"$client_config" <<CONFIG
+Host gitbox-test
+    HostName 127.0.0.1
+    User $current_user
+    Port $port
+    IdentityFile $workspace/client-key
+    IdentitiesOnly yes
+    BatchMode yes
+    StrictHostKeyChecking yes
+    UserKnownHostsFile $known_hosts
+    LogLevel ERROR
+CONFIG
+printf '#!/bin/sh\nexec "%s" -F "%s" "$@"\n' "$ssh_path" "$client_config" >"$workspace/bin/ssh"
+chmod +x "$workspace/bin/ssh"
+export PATH="$workspace/bin:$PATH"
+export XDG_CONFIG_HOME="$workspace/config"
+
+test -z "$(gitbox --server gitbox-test repo list)"
+test -z "$(gitbox --server gitbox-test folder list)"
+gitbox --server gitbox-test folder create projects/archive
+gitbox --server gitbox-test repo create projects/compiler
+gitbox server set-default gitbox-test
+gitbox repo create auto/deep/backup
+test -f "$workspace/config/gitbox/config.toml"
+diff -u <(printf 'auto\nauto/deep\nprojects\nprojects/archive\n') <(gitbox folder list)
+diff -u <(printf 'auto/deep/backup\nprojects/compiler\n') <(gitbox repo list)
+test -d "$workspace/server/repos/projects/archive"
+test -f "$workspace/server/repos/projects/compiler.git/HEAD"
+test -d "$workspace/server/repos/auto/deep"
+if gitbox --server gitbox-test folder create projects/compiler 2>/dev/null; then
+  echo "folder/repository name collision was accepted" >&2
+  exit 1
+fi
+
+git init --quiet --initial-branch=main "$workspace/source"
+git -C "$workspace/source" config user.name 'Gitbox E2E'
+git -C "$workspace/source" config user.email 'gitbox-e2e@example.invalid'
+printf 'initial\n' >"$workspace/source/content.txt"
+git -C "$workspace/source" add content.txt
+git -C "$workspace/source" commit --quiet -m initial
+git -C "$workspace/source" remote add origin gitbox-test:projects/compiler.git
+git -C "$workspace/source" push --quiet origin main
+git clone --quiet gitbox-test:projects/compiler.git "$workspace/clone"
+test "$(git -C "$workspace/clone" rev-parse HEAD)" = "$(git -C "$workspace/source" rev-parse HEAD)"
+
+printf 'updated\n' >>"$workspace/source/content.txt"
+git -C "$workspace/source" commit --quiet -am update
+git -C "$workspace/source" push --quiet origin main
+git -C "$workspace/clone" fetch --quiet origin
+test "$(git -C "$workspace/clone" rev-parse refs/remotes/origin/main)" = "$(git -C "$workspace/source" rev-parse HEAD)"
+
+echo "Gitbox SSH create, list, default server, push, clone, and fetch passed"
