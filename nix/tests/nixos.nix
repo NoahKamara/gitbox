@@ -6,6 +6,7 @@ pkgs.testers.runNixOSTest {
   name = "gitbox";
   nodes.server = { lib, ... }: {
     imports = [ ../nixos.nix ];
+    virtualisation.writableStore = true;
     services.gitbox = {
       enable = true;
       package = gitbox;
