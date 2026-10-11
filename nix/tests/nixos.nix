@@ -7,6 +7,10 @@ pkgs.testers.runNixOSTest {
   nodes.server = { lib, ... }: {
     imports = [ ../nixos.nix ];
     virtualisation.writableStore = true;
+    boot.nixStoreMountOpts = [
+      "nodev"
+      "nosuid"
+    ];
     services.gitbox = {
       enable = true;
       package = gitbox;
@@ -48,7 +52,7 @@ pkgs.testers.runNixOSTest {
     server.succeed("test ! -L /etc/ssh/gitbox-authorized_keys && test $(stat -c %a:%u:%g /etc/ssh/gitbox-authorized_keys) = 444:0:0")
     client.succeed("gitbox server set-default box")
     client.succeed("ssh-keygen -q -t ed25519 -N \"\" -f /root/unrelated; install -m600 /root/unrelated /root/key")
-    assert "Permission denied (publickey)" in client.fail("gitbox repo list")
+    assert "Permission denied (publickey)" in client.fail("gitbox repo list 2>&1")
     client.succeed("install -m600 ${keys.snakeOilPrivateKey} /root/key")
     client.succeed("gitbox repo create projects/example")
     client.succeed("git init -b main /tmp/work; cd /tmp/work; git config user.name Test; git config user.email test@example.invalid; echo hello > hello; git add hello")
@@ -64,7 +68,7 @@ pkgs.testers.runNixOSTest {
     server.succeed("/run/current-system/specialisation/rotated/bin/switch-to-configuration test")
     server.wait_for_unit("sshd.service")
     client.succeed("install -m600 ${keys.snakeOilPrivateKey} /root/key")
-    assert "Permission denied (publickey)" in client.fail("gitbox repo list")
+    assert "Permission denied (publickey)" in client.fail("gitbox repo list 2>&1")
     client.succeed("install -m600 ${keys.snakeOilEd25519PrivateKey} /root/key")
     assert client.succeed("gitbox repo list").splitlines() == ["projects/example", "projects/extra-0", "projects/extra-1"]
     client.succeed("git -C /tmp/clone-1 fetch origin")
