@@ -53,8 +53,11 @@ scripts for that account. Configure ports, listen addresses, firewall behavior,
 and any host-wide SSH allowlists through `services.openssh`. Include the Gitbox
 account if you use `AllowUsers` or `AllowGroups`.
 
-Server configuration and the public key live in the Nix store. Rebuilds apply
-key changes and select the current package; no `gitboxd init` step is needed.
+Server configuration and the public key live in the Nix store. The module
+installs a root-owned copy of the authorized key at `/etc/ssh/gitbox-authorized_keys`
+so OpenSSH's permission checks do not traverse the group-writable Nix store.
+Rebuilds apply key changes and select the current package; no `gitboxd init`
+step is needed.
 Repositories persist under `dataDir/repos`. Changing `dataDir`, `user`, or `group`
 does not migrate existing repositories or recursively change their ownership.
 The current server supports one administrator key.

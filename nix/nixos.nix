@@ -72,6 +72,11 @@ in
       }
     ];
     environment.systemPackages = [ cfg.package ];
+    # An explicit mode installs a copy, keeping StrictModes checks out of /nix/store.
+    environment.etc."ssh/gitbox-authorized_keys" = {
+      source = authorizedKeys;
+      mode = "0444";
+    };
     users.groups.${cfg.group} = { };
     users.users.${cfg.user} = {
       isSystemUser = true;
@@ -87,7 +92,7 @@ in
       enable = true;
       extraConfig = ''
         Match User ${cfg.user}
-          AuthorizedKeysFile ${authorizedKeys}
+          AuthorizedKeysFile /etc/ssh/gitbox-authorized_keys
           AuthorizedKeysCommand none
           TrustedUserCAKeys none
           AuthenticationMethods publickey

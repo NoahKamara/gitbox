@@ -38,6 +38,9 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     start_all()
     server.wait_for_unit("sshd.service")
+    # Match multi-user stores where the nixbld group can write.
+    server.succeed("chmod g+w /nix/store")
+    server.succeed("test ! -L /etc/ssh/gitbox-authorized_keys && test $(stat -c %a:%u:%g /etc/ssh/gitbox-authorized_keys) = 444:0:0")
     client.succeed("install -m600 ${keys.snakeOilPrivateKey} /root/key")
     client.succeed("gitbox server set-default box")
     client.succeed("gitbox repo create projects/example")
