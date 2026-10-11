@@ -42,11 +42,12 @@ pub fn request(server: &str, request: &Request) -> Result<Response> {
         "unsupported server protocol version"
     );
     match (&response.body, request) {
+        (Response::Created { path }, Request::CreateFolder { path: requested })
+            if path == requested => {}
         (
-            Response::Created { path },
-            Request::CreateFolder { path: requested }
-            | Request::CreateRepository { path: requested },
-        ) if path == requested => {}
+            Response::Repository { repository },
+            Request::CreateRepository { path, .. } | Request::InspectRepository { path },
+        ) if &repository.path == path => {}
         (Response::Paths { .. }, Request::ListFolders {} | Request::ListRepositories {}) => {}
         (Response::Error { .. }, _) => {}
         _ => bail!("unexpected server response"),

@@ -54,7 +54,7 @@ sshd_config="$workspace/sshd_config"
 sshd_log="$workspace/sshd.log"
 client_config="$workspace/client_config"
 
-for attempt in {1..10}; do
+for _attempt in {1..10}; do
   port=$((20000 + RANDOM % 20000))
   cat >"$sshd_config" <<CONFIG
 Port $port
@@ -80,7 +80,7 @@ CONFIG
   }
   "$sshd_path" -D -e -f "$sshd_config" >"$sshd_log" 2>&1 &
   candidate_pid=$!
-  for wait_attempt in {1..50}; do
+  for _wait_attempt in {1..50}; do
     if "$ssh_keyscan_path" -T 1 -p "$port" 127.0.0.1 >"$known_hosts" 2>/dev/null \
       && [[ -s $known_hosts ]]; then
       sshd_pid=$candidate_pid
@@ -126,6 +126,10 @@ gitbox --server gitbox-test folder create projects/archive
 gitbox --server gitbox-test repo create projects/compiler
 gitbox server set-default gitbox-test
 gitbox repo create auto/deep/backup
+gitbox repo inspect projects/compiler >"$workspace/info"
+grep -qx 'Remote URL: gitbox-test:projects/compiler.git' "$workspace/info"
+grep -qx 'Default branch: main' "$workspace/info"
+grep -qx 'Empty: yes' "$workspace/info"
 test -f "$workspace/config/gitbox/config.toml"
 diff -u <(printf 'auto\nauto/deep\nprojects\nprojects/archive\n') <(gitbox folder list)
 diff -u <(printf 'auto/deep/backup\nprojects/compiler\n') <(gitbox repo list)
@@ -154,4 +158,20 @@ git -C "$workspace/source" push --quiet origin main
 git -C "$workspace/clone" fetch --quiet origin
 test "$(git -C "$workspace/clone" rev-parse refs/remotes/origin/main)" = "$(git -C "$workspace/source" rev-parse HEAD)"
 
-echo "Gitbox SSH create, list, default server, push, clone, and fetch passed"
+git -C "$workspace/source" switch --quiet -c develop
+(
+  cd "$workspace/source"
+  gitbox repo create htk --push --remote gitbox >"$workspace/published"
+)
+grep -qx 'Remote URL: gitbox-test:htk.git' "$workspace/published"
+test "$(git -C "$workspace/source" remote get-url origin)" = 'gitbox-test:projects/compiler.git'
+test "$(git -C "$workspace/source" remote get-url gitbox)" = 'gitbox-test:htk.git'
+test "$(git -C "$workspace/source" rev-parse --abbrev-ref '@{upstream}')" = 'gitbox/develop'
+gitbox repo inspect htk >"$workspace/info"
+grep -qx 'Default branch: develop' "$workspace/info"
+grep -qx 'Empty: no' "$workspace/info"
+git clone --quiet gitbox-test:htk.git "$workspace/published-clone"
+test "$(git -C "$workspace/published-clone" branch --show-current)" = develop
+test "$(git -C "$workspace/published-clone" rev-parse HEAD)" = "$(git -C "$workspace/source" rev-parse HEAD)"
+
+echo "Gitbox SSH create, inspect, list, default server, publish, clone, and fetch passed"

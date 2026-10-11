@@ -162,10 +162,36 @@ repositories:
 gitbox server set-default home-gitbox
 gitbox folder create projects/archive
 gitbox repo create projects/compiler
+gitbox repo inspect projects/compiler
 gitbox folder list
 gitbox repo list
 git clone home-gitbox:projects/compiler.git
 ```
+
+Repository creation and inspection print the logical path, selected server,
+Git remote URL, default branch, and whether the repository has any refs.
+Remote URLs use the SCP-style form `<server>:<path>.git`, including for
+repositories at the root, such as `home-gitbox:htk.git`.
+
+To create a repository from an existing local Git working tree and push its
+current branch:
+
+```sh
+gitbox repo create htk --push
+# Choose another remote name when origin is already configured:
+gitbox repo create projects/compiler --push --remote gitbox
+```
+
+`--push` adds the local remote, named `origin` by default, and pushes only the
+current branch with upstream tracking. The remote repository's default branch
+matches the local branch. Plain `repo create` creates an empty repository with
+`main` as its default branch and leaves local Git configuration alone.
+
+Publishing requires an existing working tree, a checked-out branch, and at least
+one commit. An existing remote with the selected name is an error; use `--remote`
+to choose another name. These checks run before server creation. Gitbox does not
+stage or commit files. If the push fails, the server repository and configured
+remote remain available, and the error includes a command to retry the push.
 
 The default is stored as `default_server = "home-gitbox"` in
 `~/.config/gitbox/config.toml`, or under `$XDG_CONFIG_HOME/gitbox/config.toml`
@@ -227,7 +253,7 @@ filesystem operations and locking, `admin` executes administrative requests,
 `rpc` handles JSON framing, and `ssh` parses and runs restricted SSH commands.
 The client keeps SSH request/response handling in `transport`.
 
-Administrative requests and responses use protocol version 3 and a JSON envelope
+Administrative requests and responses use protocol version 4 and a JSON envelope
 with `version` and `body` fields. Requests carry an operation and its required
 arguments; paths validate during decoding. Errors include a code
 (`invalid_request`, `unsupported_version`, or `operation_failed`) and a message.

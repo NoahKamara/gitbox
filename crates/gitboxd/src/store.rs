@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail, ensure};
-use gitbox_core::LogicalPath;
+use gitbox_core::{LogicalPath, RepositoryInfo};
 
 /// Owns the repository namespace and its filesystem operations.
 /// Locks coordinate Gitbox processes; the tree must not be mutated by other writers.
@@ -142,6 +142,47 @@ impl RepositoryStore {
         })
     }
 
+    pub fn inspect_repository(&self, path: &LogicalPath) -> Result<RepositoryInfo> {
+        let repository = self.open_repository(path)?;
+        let branch = Command::new("git")
+            .args(["symbolic-ref", "--quiet", "HEAD"])
+            .current_dir(repository.path())
+            .output()
+            .context("read repository default branch")?;
+        let default_branch = match branch.status.code() {
+            Some(0) => {
+                let branch = String::from_utf8(branch.stdout)?;
+                Some(
+                    branch
+                        .trim()
+                        .strip_prefix("refs/heads/")
+                        .context("repository HEAD does not point to a branch")?
+                        .to_owned(),
+                )
+            }
+            Some(1) => None,
+            _ => bail!(
+                "read repository default branch: {}",
+                String::from_utf8_lossy(&branch.stderr).trim()
+            ),
+        };
+        let refs = Command::new("git")
+            .args(["for-each-ref", "--count=1", "--format=%(refname)"])
+            .current_dir(repository.path())
+            .output()
+            .context("read repository refs")?;
+        ensure!(
+            refs.status.success(),
+            "read repository refs: {}",
+            String::from_utf8_lossy(&refs.stderr).trim()
+        );
+        Ok(RepositoryInfo {
+            path: path.clone(),
+            default_branch,
+            empty: refs.stdout.is_empty(),
+        })
+    }
+
     fn checked_parent<'a>(
         &self,
         path: &'a LogicalPath,
@@ -193,7 +234,15 @@ impl RepositoryStore {
         Ok(())
     }
 
-    pub fn create_repository(&self, path: &LogicalPath) -> Result<()> {
+    pub fn create_repository(&self, path: &LogicalPath, default_branch: &str) -> Result<()> {
+        let valid_branch = Command::new("git")
+            .args(["check-ref-format", &format!("refs/heads/{default_branch}")])
+            .output()
+            .context("validate default branch")?;
+        ensure!(
+            !default_branch.starts_with('-') && valid_branch.status.success(),
+            "invalid default branch: {default_branch}"
+        );
         let _lock = self.lock(true)?;
         let (parent, name) = self.checked_parent(path, true)?;
         ensure!(
@@ -207,7 +256,13 @@ impl RepositoryStore {
         );
         fs::create_dir(&repo).with_context(|| format!("create repository {}", repo.display()))?;
         let result = Command::new("git")
-            .args(["init", "--bare", "--quiet", "--initial-branch=main", "."])
+            .args([
+                "init",
+                "--bare",
+                "--quiet",
+                &format!("--initial-branch={default_branch}"),
+                ".",
+            ])
             .current_dir(&repo)
             .output()
             .context("run git init --bare");
@@ -256,7 +311,7 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let store = RepositoryStore::open(&root).unwrap();
         store
-            .create_repository(&"team/compiler".parse().unwrap())
+            .create_repository(&"team/compiler".parse().unwrap(), "main")
             .unwrap();
         let repo = root.join("team/compiler.git");
         let output = Command::new("git")
@@ -266,6 +321,72 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(output.stdout, b"true\n");
+    }
+
+    #[test]
+    fn inspect_reports_default_branch_and_refs_for_root_repository() {
+        let dir = tempdir().unwrap();
+        let store = RepositoryStore::open(dir.path()).unwrap();
+        let path = "htk".parse().unwrap();
+        store.create_repository(&path, "topic/release").unwrap();
+        let info = store.inspect_repository(&path).unwrap();
+        assert_eq!(info.path, path);
+        assert_eq!(info.default_branch.as_deref(), Some("topic/release"));
+        assert!(info.empty);
+        let source = tempdir().unwrap();
+        for args in [
+            vec!["init", "--quiet", "--initial-branch=topic/release"],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(source.path())
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        assert!(
+            Command::new("git")
+                .args(["push", "--quiet"])
+                .arg(dir.path().join("htk.git"))
+                .arg("HEAD")
+                .current_dir(source.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(!store.inspect_repository(&path).unwrap().empty);
+        assert!(
+            store
+                .inspect_repository(&"missing".parse().unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn invalid_default_branch_does_not_create_repository_or_parents() {
+        let dir = tempdir().unwrap();
+        let store = RepositoryStore::open(dir.path()).unwrap();
+        for branch in ["", "bad..branch", "-bad", "bad branch"] {
+            assert!(
+                store
+                    .create_repository(&"team/project".parse().unwrap(), branch)
+                    .is_err()
+            );
+        }
+        assert!(!dir.path().join("team").exists());
     }
 
     #[test]
@@ -286,12 +407,14 @@ mod tests {
         let root = dir.path().join("repos");
         fs::create_dir(&root).unwrap();
         let store = RepositoryStore::open(&root).unwrap();
-        store.create_repository(&"team".parse().unwrap()).unwrap();
+        store
+            .create_repository(&"team".parse().unwrap(), "main")
+            .unwrap();
         assert!(store.create_folder(&"team".parse().unwrap()).is_err());
         store.create_folder(&"archive".parse().unwrap()).unwrap();
         assert!(
             store
-                .create_repository(&"archive".parse().unwrap())
+                .create_repository(&"archive".parse().unwrap(), "main")
                 .is_err()
         );
     }
@@ -306,10 +429,10 @@ mod tests {
             .create_folder(&"projects/archive".parse().unwrap())
             .unwrap();
         store
-            .create_repository(&"projects/compiler".parse().unwrap())
+            .create_repository(&"projects/compiler".parse().unwrap(), "main")
             .unwrap();
         store
-            .create_repository(&"auto/deep/backup".parse().unwrap())
+            .create_repository(&"auto/deep/backup".parse().unwrap(), "main")
             .unwrap();
         let tree = store.list().unwrap();
         let folders: Vec<_> = tree.folders.iter().map(|p| p.as_str()).collect();
@@ -335,7 +458,7 @@ mod tests {
         symlink(&outside, root.join("team")).unwrap();
         assert!(
             store
-                .create_repository(&"team/compiler".parse().unwrap())
+                .create_repository(&"team/compiler".parse().unwrap(), "main")
                 .is_err()
         );
         assert!(!outside.join("compiler.git").exists());
@@ -345,7 +468,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = RepositoryStore::open(dir.path()).unwrap();
         let path = "project".parse().unwrap();
-        store.create_repository(&path).unwrap();
+        store.create_repository(&path, "main").unwrap();
         let repository = store.open_repository(&path).unwrap();
         assert_eq!(repository.path(), dir.path().join("project.git"));
         let second = store.open_repository(&path).unwrap();
@@ -374,7 +497,7 @@ mod tests {
             let repo = scope.spawn(|| {
                 let store = RepositoryStore::open(dir.path()).unwrap();
                 barrier.wait();
-                store.create_repository(&"project".parse().unwrap())
+                store.create_repository(&"project".parse().unwrap(), "main")
             });
             assert_ne!(folder.join().unwrap().is_ok(), repo.join().unwrap().is_ok());
         });

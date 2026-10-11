@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 pub const MAX_REQUEST_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
@@ -75,7 +75,13 @@ pub enum Request {
     #[serde(rename = "folder.list")]
     ListFolders {},
     #[serde(rename = "repo.create")]
-    CreateRepository { path: LogicalPath },
+    CreateRepository {
+        path: LogicalPath,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default_branch: Option<String>,
+    },
+    #[serde(rename = "repo.inspect")]
+    InspectRepository { path: LogicalPath },
     #[serde(rename = "repo.list")]
     ListRepositories {},
 }
@@ -84,8 +90,17 @@ pub enum Request {
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Response {
     Created { path: LogicalPath },
+    Repository { repository: RepositoryInfo },
     Paths { paths: Vec<LogicalPath> },
     Error { code: ErrorCode, message: String },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryInfo {
+    pub path: LogicalPath,
+    pub default_branch: Option<String>,
+    pub empty: bool,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -127,6 +142,8 @@ mod tests {
             r#"{"method":"repo.list","path":"unexpected"}"#,
             r#"{"method":"folder.list","extra":true}"#,
             r#"{"method":"repo.create","path":"valid","extra":true}"#,
+            r#"{"method":"repo.inspect","path":"../outside"}"#,
+            r#"{"method":"repo.inspect"}"#,
         ] {
             assert!(serde_json::from_str::<Request>(json).is_err(), "{json}");
         }
@@ -137,6 +154,8 @@ mod tests {
         use super::{Envelope, PROTOCOL_VERSION, Request};
         for body in [
             serde_json::json!({"method":"repo.create","path":"projects/compiler"}),
+            serde_json::json!({"method":"repo.create","path":"htk","default_branch":"develop"}),
+            serde_json::json!({"method":"repo.inspect","path":"htk"}),
             serde_json::json!({"method":"folder.create","path":"projects"}),
             serde_json::json!({"method":"repo.list"}),
             serde_json::json!({"method":"folder.list"}),

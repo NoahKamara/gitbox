@@ -53,8 +53,10 @@ fn cli_exchanges_typed_requests_and_rejects_invalid_responses() {
     .unwrap();
     for (response, expected_output, expected_error) in [
         (
-            json!({"version":PROTOCOL_VERSION,"body":{"status":"created","path":"projects/compiler"}}),
-            Some("projects/compiler\n"),
+            json!({"version":PROTOCOL_VERSION,"body":{"status":"repository","repository":{"path":"projects/compiler","default_branch":"main","empty":true}}}),
+            Some(
+                "Repository: projects/compiler\nServer: test-host\nRemote URL: test-host:projects/compiler.git\nDefault branch: main\nEmpty: yes\n",
+            ),
             None,
         ),
         (
@@ -63,7 +65,7 @@ fn cli_exchanges_typed_requests_and_rejects_invalid_responses() {
             Some("unsupported server protocol version"),
         ),
         (
-            json!({"version":PROTOCOL_VERSION,"body":{"status":"created","path":"different"}}),
+            json!({"version":PROTOCOL_VERSION,"body":{"status":"repository","repository":{"path":"different","default_branch":"main","empty":true}}}),
             None,
             Some("unexpected server response"),
         ),
@@ -73,7 +75,7 @@ fn cli_exchanges_typed_requests_and_rejects_invalid_responses() {
             Some("unexpected server response"),
         ),
         (
-            json!({"version":PROTOCOL_VERSION,"body":{"status":"created","path":"../outside"}}),
+            json!({"version":PROTOCOL_VERSION,"body":{"status":"repository","repository":{"path":"../outside","default_branch":"main","empty":true}}}),
             None,
             Some("decode server response"),
         ),

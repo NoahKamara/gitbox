@@ -84,9 +84,17 @@ mod tests {
         for (body, expected) in [
             (
                 serde_json::json!({"method":"repo.create","path":"projects/compiler"}),
-                "created",
+                "repository",
             ),
             (serde_json::json!({"method":"repo.list"}), "paths"),
+            (
+                serde_json::json!({"method":"repo.inspect","path":"projects/compiler"}),
+                "repository",
+            ),
+            (
+                serde_json::json!({"method":"repo.inspect","path":"missing"}),
+                "error",
+            ),
             (
                 serde_json::json!({"method":"folder.create","path":"projects/compiler"}),
                 "error",
@@ -100,7 +108,11 @@ mod tests {
             let response: serde_json::Value = serde_json::from_slice(&output).unwrap();
             assert_eq!(response["body"]["status"], expected);
             match expected {
-                "created" => assert_eq!(response["body"]["path"], "projects/compiler"),
+                "repository" => {
+                    assert_eq!(response["body"]["repository"]["path"], "projects/compiler");
+                    assert_eq!(response["body"]["repository"]["default_branch"], "main");
+                    assert_eq!(response["body"]["repository"]["empty"], true);
+                }
                 "paths" => assert_eq!(
                     response["body"]["paths"],
                     serde_json::json!(["projects/compiler"])
