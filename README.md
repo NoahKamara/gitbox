@@ -39,8 +39,11 @@ Import the module in the server's configuration:
     group = "gitbox";
     admin = {
       name = "noah";
-      sshKey = "ssh-ed25519 AAAA... noah@laptop";
-      # Or: sshKey = lib.trim (builtins.readFile ./keys/noah.pub);
+      sshKeys = [
+        "ssh-ed25519 AAAA... noah@laptop"
+        "ssh-ed25519 AAAA... noah@desktop"
+        # Or: (lib.trim (builtins.readFile ./keys/noah.pub))
+      ];
     };
   };
 }
@@ -48,19 +51,25 @@ Import the module in the server's configuration:
 
 The module creates the account and `dataDir/repos`, enables the system OpenSSH
 server, and restricts the Gitbox account to Gitbox commands and its declared
-admin key. It disables forwarding, interactive sessions, and user SSH startup
+admin keys. It disables forwarding, interactive sessions, and user SSH startup
 scripts for that account. Configure ports, listen addresses, firewall behavior,
 and any host-wide SSH allowlists through `services.openssh`. Include the Gitbox
 account if you use `AllowUsers` or `AllowGroups`.
 
-Server configuration and the public key live in the Nix store. The module
-installs a root-owned copy of the authorized key at `/etc/ssh/gitbox-authorized_keys`
+Server configuration and the public keys live in the Nix store. The module
+installs a root-owned copy of the authorized keys at `/etc/ssh/gitbox-authorized_keys`
 so OpenSSH's permission checks do not traverse the group-writable Nix store.
 Rebuilds apply key changes and select the current package; no `gitboxd init`
 step is needed.
 Repositories persist under `dataDir/repos`. Changing `dataDir`, `user`, or `group`
 does not migrate existing repositories or recursively change their ownership.
-The current server supports one administrator key.
+Declare at least one key. Every key grants the same administrator access.
+Each list entry must contain one public key, optionally followed by a comment,
+without line breaks or `authorized_keys` options. Removing a key and rebuilding
+revokes its access for new SSH connections.
+
+Replace the former `admin.sshKey` option with `admin.sshKeys = [ ... ];` when
+upgrading. Nix generates the current runtime configuration automatically.
 
 Replace any older local Gitbox module and `noah.services.gitbox` configuration
 with this import and `services.gitbox`. The older `gitbox --root ... ssh`
@@ -119,14 +128,35 @@ initialization as that account:
 gitboxd init \
   --data-dir /var/lib/gitbox \
   --admin alice \
-  --ssh-key /path/to/alice.pub \
+  --ssh-key /path/to/alice-laptop.pub \
+  --ssh-key /path/to/alice-desktop.pub \
   --executable /usr/local/bin/gitboxd
 ```
 
 `init` creates `config.toml`, `repos/`, and `.ssh/authorized_keys` under the
-data directory. The key entry runs `gitboxd` as a restricted forced command.
+data directory. Repeat `--ssh-key` for each administrator key, with at least
+one required. Each file must contain one public key without `authorized_keys`
+options. All keys are validated before initialization writes any state.
+Each key entry runs `gitboxd` as a restricted forced command.
 The `--executable` path must remain valid after upgrades. If omitted, Gitbox
 uses the path of the running executable.
+
+Runtime configuration uses version 2 and stores only the administrator name:
+
+```toml
+version = 2
+
+[admin]
+name = "alice"
+```
+
+OpenSSH authenticates keys through `authorized_keys`; Gitbox does not duplicate
+them in runtime configuration. For an existing standalone installation, replace
+the version 1 configuration with this shape and remove `--key-id admin` from
+each forced command when upgrading the binary. Preserve the key restrictions
+and executable/data-directory paths. Existing repositories stay in place.
+Manage subsequent key additions and removals in the authorized-keys file,
+using the same restricted forced command for each entry.
 
 Configure OpenSSH to use that authorized keys file for the dedicated account
 and to allow only public-key authentication:
@@ -203,11 +233,13 @@ accepted; an existing repository is an error. A folder and repository cannot
 have the same logical path. The `.git` suffix appears only in Git remote URLs
 and on disk.
 
-Only the initialized admin key is accepted in this slice. Folder and
+Only the configured administrator keys are accepted in this slice. Folder and
 repository permissions will follow.
 
 Run `scripts/e2e-ssh` to test initialization, remote management, push, clone,
-and fetch against a temporary local OpenSSH server.
+and fetch against a temporary local OpenSSH server. It also verifies access
+with two administrator keys, unrelated-key rejection, command restrictions,
+and revocation of one key while the other remains usable.
 
 ## Docker test server
 

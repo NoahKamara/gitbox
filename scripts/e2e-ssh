@@ -38,11 +38,14 @@ mkdir "$workspace/bin"
 cp target/debug/gitbox target/debug/gitboxd "$workspace/bin/"
 
 ssh-keygen -q -t ed25519 -N '' -f "$workspace/client-key"
+ssh-keygen -q -t ed25519 -N '' -f "$workspace/second-key"
+ssh-keygen -q -t ed25519 -N '' -f "$workspace/unrelated-key"
 ssh-keygen -q -t ed25519 -N '' -f "$workspace/host-key"
 "$workspace/bin/gitboxd" init \
   --data-dir "$workspace/server" \
   --admin test-admin \
   --ssh-key "$workspace/client-key.pub" \
+  --ssh-key "$workspace/second-key.pub" \
   --executable "$workspace/bin/gitboxd"
 
 current_user=$(id -un)
@@ -105,10 +108,15 @@ fi
 
 cat >"$client_config" <<CONFIG
 Host gitbox-test
+    IdentityFile $workspace/client-key
+Host gitbox-second
+    IdentityFile $workspace/second-key
+Host gitbox-unrelated
+    IdentityFile $workspace/unrelated-key
+Host gitbox-*
     HostName 127.0.0.1
     User $current_user
     Port $port
-    IdentityFile $workspace/client-key
     IdentitiesOnly yes
     BatchMode yes
     StrictHostKeyChecking yes
@@ -174,4 +182,40 @@ git clone --quiet gitbox-test:htk.git "$workspace/published-clone"
 test "$(git -C "$workspace/published-clone" branch --show-current)" = develop
 test "$(git -C "$workspace/published-clone" rev-parse HEAD)" = "$(git -C "$workspace/source" rev-parse HEAD)"
 
-echo "Gitbox SSH create, inspect, list, default server, publish, clone, and fetch passed"
+gitbox --server gitbox-second folder create secondary
+gitbox --server gitbox-second repo create secondary/example
+gitbox --server gitbox-second repo list | grep -qx 'secondary/example'
+git clone --quiet gitbox-second:projects/compiler.git "$workspace/second-clone"
+git -C "$workspace/second-clone" config user.name 'Gitbox E2E'
+git -C "$workspace/second-clone" config user.email 'gitbox-e2e@example.invalid'
+git -C "$workspace/second-clone" commit --quiet --allow-empty -m second-key
+git -C "$workspace/second-clone" push --quiet origin main
+git -C "$workspace/clone" fetch --quiet origin
+test "$(git -C "$workspace/clone" rev-parse refs/remotes/origin/main)" = "$(git -C "$workspace/second-clone" rev-parse HEAD)"
+
+for server in gitbox-test gitbox-second; do
+  if ssh "$server" id >"$workspace/shell-output" 2>&1; then
+    echo "arbitrary command accepted for $server" >&2
+    exit 1
+  fi
+  grep -q 'unsupported SSH command' "$workspace/shell-output"
+done
+
+if gitbox --server gitbox-unrelated repo list >"$workspace/unrelated-output" 2>&1; then
+  echo "unrelated key was accepted" >&2
+  exit 1
+fi
+grep -q 'Permission denied (publickey)' "$workspace/unrelated-output"
+
+# Revoke the first key without changing the surviving administrator's access.
+sed -n '2p' "$workspace/server/.ssh/authorized_keys" >"$workspace/remaining-key"
+cat "$workspace/remaining-key" >"$workspace/server/.ssh/authorized_keys"
+if gitbox --server gitbox-test repo list >"$workspace/revoked-output" 2>&1; then
+  echo "revoked key was accepted" >&2
+  exit 1
+fi
+grep -q 'Permission denied (publickey)' "$workspace/revoked-output"
+gitbox --server gitbox-second repo list | grep -qx 'secondary/example'
+git -C "$workspace/second-clone" fetch --quiet origin
+
+echo "Gitbox SSH administration, Git transport, multiple keys, restrictions, and revocation passed"

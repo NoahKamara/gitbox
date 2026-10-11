@@ -31,8 +31,9 @@ enum Commands {
         data_dir: PathBuf,
         #[arg(long)]
         admin: String,
-        #[arg(long)]
-        ssh_key: PathBuf,
+        /// Administrator public key file. Repeat for each key.
+        #[arg(long = "ssh-key", required = true)]
+        ssh_keys: Vec<PathBuf>,
         /// Stable absolute path to gitboxd used in authorized_keys.
         #[arg(long)]
         executable: Option<PathBuf>,
@@ -45,8 +46,6 @@ enum Commands {
         /// Configuration file, defaults to config.toml in the data directory.
         #[arg(long)]
         config: Option<PathBuf>,
-        #[arg(long)]
-        key_id: String,
     },
 }
 
@@ -61,7 +60,6 @@ struct Config {
 #[serde(deny_unknown_fields)]
 struct Admin {
     name: String,
-    ssh_key: String,
 }
 
 fn main() {
@@ -76,21 +74,17 @@ fn run() -> Result<()> {
         Commands::Init {
             data_dir,
             admin,
-            ssh_key,
+            ssh_keys,
             executable,
-        } => init(&data_dir, &admin, &ssh_key, executable.as_deref()),
-        Commands::Ssh {
-            data_dir,
-            config,
-            key_id,
-        } => ssh::session(&data_dir, config.as_deref(), &key_id),
+        } => init(&data_dir, &admin, &ssh_keys, executable.as_deref()),
+        Commands::Ssh { data_dir, config } => ssh::session(&data_dir, config.as_deref()),
     }
 }
 
 fn init(
     data_dir: &Path,
     admin: &str,
-    ssh_key_path: &Path,
+    ssh_key_paths: &[PathBuf],
     executable: Option<&Path>,
 ) -> Result<()> {
     ensure!(
@@ -101,36 +95,51 @@ fn init(
         "admin name must contain only ASCII letters, numbers, '-' or '_'"
     );
 
-    let key_file = fs::read_to_string(ssh_key_path).context("read SSH public key")?;
-    let key_line = key_file.trim();
     ensure!(
-        !key_line.contains(['\n', '\r']),
-        "SSH key file must contain one key"
+        !ssh_key_paths.is_empty(),
+        "at least one SSH key is required"
     );
-    let mut parts = key_line.split_whitespace();
-    let key_type = parts.next().context("SSH key is empty")?;
-    let key_data = parts.next().context("SSH key is incomplete")?;
-    ensure!(
-        matches!(
-            key_type,
-            "ssh-ed25519" | "ssh-rsa" | "sk-ssh-ed25519@openssh.com"
-        ) || key_type.starts_with("ecdsa-sha2-")
-            || key_type.starts_with("sk-ecdsa-sha2-"),
-        "unsupported SSH public key type"
-    );
-    ensure!(
-        key_data
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=')),
-        "SSH public key data is malformed"
-    );
-    let valid_key = Command::new("ssh-keygen")
-        .args(["-lf"])
-        .arg(ssh_key_path)
-        .output()
-        .context("run ssh-keygen to validate the public key")?;
-    ensure!(valid_key.status.success(), "invalid SSH public key");
-    let public_key = format!("{key_type} {key_data}");
+    let mut public_keys = Vec::with_capacity(ssh_key_paths.len());
+    for ssh_key_path in ssh_key_paths {
+        let key_file = fs::read_to_string(ssh_key_path)
+            .with_context(|| format!("read SSH public key {}", ssh_key_path.display()))?;
+        let key_line = key_file
+            .strip_suffix("\r\n")
+            .or_else(|| key_file.strip_suffix('\n'))
+            .unwrap_or(&key_file);
+        ensure!(
+            !key_line.contains(['\n', '\r']),
+            "SSH key file must contain one key"
+        );
+        let mut parts = key_line.split_whitespace();
+        let key_type = parts.next().context("SSH key is empty")?;
+        let key_data = parts.next().context("SSH key is incomplete")?;
+        ensure!(
+            matches!(
+                key_type,
+                "ssh-ed25519" | "ssh-rsa" | "sk-ssh-ed25519@openssh.com"
+            ) || key_type.starts_with("ecdsa-sha2-")
+                || key_type.starts_with("sk-ecdsa-sha2-"),
+            "unsupported SSH public key type"
+        );
+        ensure!(
+            key_data
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=')),
+            "SSH public key data is malformed"
+        );
+        let valid_key = Command::new("ssh-keygen")
+            .args(["-lf"])
+            .arg(ssh_key_path)
+            .output()
+            .context("run ssh-keygen to validate the public key")?;
+        ensure!(
+            valid_key.status.success(),
+            "invalid SSH public key {}",
+            ssh_key_path.display()
+        );
+        public_keys.push(format!("{key_type} {key_data}"));
+    }
 
     ensure!(
         !data_dir.exists() || !fs::symlink_metadata(data_dir)?.file_type().is_symlink(),
@@ -182,17 +191,19 @@ fn init(
         "paths must not contain newlines"
     );
     let shell_command = format!(
-        "{} ssh --data-dir {} --key-id admin",
+        "{} ssh --data-dir {}",
         shell_quote(executable),
         shell_quote(data_dir_text)
     );
     let key_option = shell_command.replace('\\', "\\\\").replace('"', "\\\"");
-    let authorized_key = format!("restrict,command=\"{key_option}\" {public_key}\n");
+    let authorized_keys: String = public_keys
+        .iter()
+        .map(|key| format!("restrict,command=\"{key_option}\" {key}\n"))
+        .collect();
     let config = Config {
-        version: 1,
+        version: 2,
         admin: Admin {
             name: admin.to_owned(),
-            ssh_key: public_key,
         },
     };
     let config_text = toml::to_string_pretty(&config)?;
@@ -204,7 +215,7 @@ fn init(
     let mut auth_file = auth_options
         .open(&authorized_keys_path)
         .context("create authorized_keys")?;
-    if let Err(error) = auth_file.write_all(authorized_key.as_bytes()) {
+    if let Err(error) = auth_file.write_all(authorized_keys.as_bytes()) {
         let _ = fs::remove_file(&authorized_keys_path);
         return Err(error).context("write authorized_keys");
     }

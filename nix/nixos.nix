@@ -8,24 +8,26 @@ let
   cfg = config.services.gitbox;
   format = pkgs.formats.toml { };
   serverConfig = format.generate "gitbox-server.toml" {
-    version = 1;
+    version = 2;
     admin = {
       name = cfg.admin.name;
-      ssh_key = cfg.admin.sshKey;
     };
   };
-  publicKey = pkgs.writeText "gitbox-admin.pub" (cfg.admin.sshKey + "\n");
+  publicKeys = map (key: pkgs.writeText "gitbox-admin.pub" (key + "\n")) cfg.admin.sshKeys;
   authorizedKeys =
     pkgs.runCommand "gitbox-authorized-keys" { nativeBuildInputs = [ pkgs.openssh ]; }
       ''
-        ssh-keygen -lf ${publicKey} >/dev/null
-        printf 'restrict ' > "$out"
-        cat ${publicKey} >> "$out"
+        : > "$out"
+        for key in ${lib.escapeShellArgs publicKeys}; do
+          ssh-keygen -lf "$key" >/dev/null
+          printf 'restrict ' >> "$out"
+          cat "$key" >> "$out"
+        done
       '';
   forcedCommand = pkgs.writeShellScript "gitbox-ssh" ''
     exec ${cfg.package}/bin/gitboxd ssh \
       --data-dir ${lib.escapeShellArg cfg.dataDir} \
-      --config ${serverConfig} --key-id admin
+      --config ${serverConfig}
   '';
 in
 {
@@ -57,10 +59,15 @@ in
       default = "admin";
       description = "Gitbox administrator name.";
     };
-    admin.sshKey = lib.mkOption {
-      type = lib.types.strMatching "(ssh-|ecdsa-|sk-)[^\n\r]+";
-      example = "ssh-ed25519 AAAA... alice@laptop";
-      description = "Administrator public key, without authorized_keys options. This public key is stored in the Nix store.";
+    admin.sshKeys = lib.mkOption {
+      type = lib.types.nonEmptyListOf (
+        lib.types.strMatching "(ssh-|ecdsa-|sk-)[^[:space:]]+[ \t]+[A-Za-z0-9+/=]+([ \t]+[^\n\r]*)?"
+      );
+      example = [
+        "ssh-ed25519 AAAA... alice@laptop"
+        "ssh-ed25519 AAAA... alice@desktop"
+      ];
+      description = "Administrator public keys, without authorized_keys options. Every key grants the same administrator access. These public keys are stored in the Nix store.";
     };
   };
 
